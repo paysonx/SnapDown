@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Segoe UI",
+    system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+
+  /* 品牌动画 */
+  --animate-fade-up: fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-fade-in: fade-in 0.4s ease both;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-glow: glow 2.4s ease-in-out infinite;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply font-sans text-slate-700 antialiased;
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  /* 页面主背景：白 → 极浅蓝 → 极浅靛紫 的渐变白，比纯白更有质感与吸引力 */
+  background-color: #ffffff;
+  background-image: linear-gradient(
+    180deg,
+    #ffffff 0%,
+    #e6efff 40%,
+    #dee8ff 70%,
+    #f2ecff 100%
+  );
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+::selection {
+  background-color: rgb(37 99 235 / 0.15);
+  color: #1e3a8a;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@keyframes glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(37 99 235 / 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgb(37 99 235 / 0);
+  }
+}
+
+/* 主 CTA 渐变按钮 */
+.btn-primary {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3.5 text-base font-semibold text-white transition-all duration-300;
+  background-image: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
+  min-height: 48px;
+}
+.btn-primary:hover {
+  background-image: linear-gradient(135deg, #1d4ed8 0%, #4338ca 100%);
+  box-shadow: 0 10px 28px -8px rgb(37 99 235 / 0.5);
+  transform: translateY(-1px);
+}
+.btn-primary:active {
+  transform: translateY(0);
+}
+.btn-primary:disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* VIP 专属按钮：暖橙金色调，与蓝色主色形成付费引导对比 */
+.btn-vip {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-all duration-300;
+  background-image: linear-gradient(135deg, #c2410c 0%, #9a3412 58%, #7c2d12 100%);
+  box-shadow: 0 6px 18px -8px rgb(154 52 18 / 0.7);
+}
+.btn-vip:hover {
+  background-image: linear-gradient(135deg, #d2470d 0%, #a63a14 58%, #7c2d12 100%);
+  box-shadow: 0 12px 28px -8px rgb(234 88 12 / 0.55);
+  transform: translateY(-1px);
+}
+.btn-vip:active {
+  transform: translateY(0);
+}
+.btn-vip:focus-visible,
+.btn-primary:focus-visible {
+  outline: 2px solid #1e293b;
+  outline-offset: 2px;
+}
+
+/* 会员页金色高亮文字 */
+.text-gold {
+  background-image: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 卡片：参考站设计语言 —— 圆角 + 细描边 + 蓝色光晕悬停 */
+.card {
+  @apply rounded-xl bg-white ring-1 ring-slate-200/60 transition-all duration-500;
+}
+.card-hover:hover {
+  @apply shadow-2xl;
+  --tw-shadow-color: rgb(37 99 235 / 0.1);
+  --tw-shadow: 0 25px 50px -12px var(--tw-shadow-color);
+}
+
+/* 会员套餐卡片：金色描边 + 暖色光晕 */
+.card-vip {
+  @apply rounded-2xl bg-white ring-1 transition-all duration-300;
+  --tw-ring-color: rgb(245 158 11 / 0.4);
+  box-shadow: 0 18px 44px -26px rgb(194 65 12 / 0.55);
+}
+.card-vip:hover {
+  --tw-ring-color: rgb(234 88 12 / 0.6);
+  transform: translateY(-2px);
+}
+
+/* 平台标签 chip */
+.chip {
+  @apply inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium text-slate-500 transition-colors duration-200 hover:text-blue-600;
+}
+
+/* 进度条轨道 */
+.progress-track {
+  @apply relative h-2.5 w-full overflow-hidden rounded-full bg-slate-100;
+}
+.progress-fill {
+  @apply h-full rounded-full transition-[width] duration-500 ease-out;
+  background-image: linear-gradient(90deg, #2563eb, #6366f1);
+}
+
+/* 下载中条纹动效 */
+.progress-stripes {
+  position: relative;
+  overflow: hidden;
+}
+.progress-stripes::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgb(255 255 255 / 0.35),
+    transparent
+  );
+  animation: shimmer 1.6s linear infinite;
+}
+
+/* 减少动态偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

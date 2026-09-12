@@ -1,0 +1,25 @@
+# 项目文件
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 下载内容
+downloads/
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+frontend/smoke-screenshots/
+
+# 工具与缓存（本机开发用）
+.npm-cache/
+.pip-cache/
+.tmp/
+.playwright-browsers/
+backend/.pytest_cache/
+.dsh/
+
+# 系统
+.DS_Store
+Thumbs.db
