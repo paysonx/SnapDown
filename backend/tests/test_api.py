@@ -197,3 +197,77 @@ def test_outtmpl_contains_format_id():
     assert "%(format_id)s" in tpl
     assert "%(id)s" in tpl
     assert "%(title).120B" in tpl
+
+
+# ---------- 同分辨率格式优选（m3u8_native 抢占的回归测试） ----------
+
+def _fmt(format_id, height, protocol="https", tbr=2000, acodec="none", vcodec="avc1.640028", **extra):
+    f = {"format_id": format_id, "ext": "mp4", "height": height, "width": height * 16 // 9,
+         "fps": 30, "vcodec": vcodec, "acodec": acodec, "tbr": tbr,
+         "protocol": protocol, "format_note": f"{height}p"}
+    f.update(extra)
+    return f
+
+
+def test_m3u8_native_does_not_win_over_dash():
+    """yt-dlp 把 m3u8_native 排在 formats 最前，同分辨率下不能再被它抢走。
+
+    m3u8 是切片流：逐片请求、并发低、下载完还要 ffmpeg 拼接，
+    实测比同分辨率 DASH 直连流慢一个数量级。
+    """
+    raw = [
+        _fmt("m3u8_native", 1080, protocol="m3u8_native", tbr=4500),
+        _fmt("137", 1080, tbr=4400),
+    ]
+    result = downloader._build_format_list(raw, duration=600)
+    assert [f["format_id"] for f in result] == ["137"]
+
+
+def test_progressive_wins_over_video_only_at_same_height():
+    """同分辨率下带音轨的渐进式格式优先——省掉一次 ffmpeg 合并。
+
+    YouTube 从 1080p 起强制 DASH，所以这条只对 720p 及以下生效。
+    """
+    raw = [
+        _fmt("136", 720, tbr=1100, vcodec="vp9", ext="webm"),   # video-only webm
+        _fmt("22", 720, tbr=1500, acodec="mp4a.40.2"),          # progressive mp4
+    ]
+    result = downloader._build_format_list(raw, duration=600)
+    assert [f["format_id"] for f in result] == ["22"]
+    assert result[0]["acodec"] == "mp4a"
+
+
+def test_same_rank_prefers_higher_bitrate():
+    """优先级相同时（如同为主流 video-only DASH）取码率更高的那个。"""
+    raw = [
+        _fmt("248", 1080, tbr=4200, vcodec="vp9", ext="webm"),
+        _fmt("137", 1080, tbr=4400),
+    ]
+    result = downloader._build_format_list(raw, duration=600)
+    assert [f["format_id"] for f in result] == ["137"]
+
+
+def test_m3u8_not_excluded_when_it_is_the_only_option():
+    """纯 HLS 源（没有 DASH 对应流）时仍要能选中 m3u8，不能过滤成空列表。"""
+    raw = [_fmt("m3u8_native", 720, protocol="m3u8_native", tbr=2500)]
+    result = downloader._build_format_list(raw, duration=600)
+    assert [f["format_id"] for f in result] == ["m3u8_native"]
+
+
+def test_format_list_filters_audio_only_and_zero_height():
+    """纯音频流（vcodec=none）与无分辨率条目仍应被过滤。"""
+    raw = [
+        _fmt("140", 0, acodec="mp4a.40.2", vcodec="none"),
+        _fmt("sb3", 0, acodec="mp4a.40.2"),
+        _fmt("137", 1080),
+    ]
+    result = downloader._build_format_list(raw, duration=600)
+    assert [f["format_id"] for f in result] == ["137"]
+
+
+def test_format_list_sorted_by_height_desc_and_estimates_filesize():
+    """输出按分辨率降序，filesize 缺失时按 tbr 估算。"""
+    raw = [_fmt("137", 1080, tbr=4400), _fmt("22", 720, tbr=1500, acodec="mp4a.40.2")]
+    result = downloader._build_format_list(raw, duration=600)
+    assert [f["height"] for f in result] == [1080, 720]
+    assert result[0]["filesize"] == int(4400 * 1024 / 8 * 600)

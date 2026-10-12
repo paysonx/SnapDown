@@ -118,19 +118,42 @@ def parse_video(url: str) -> dict:
     }
 
 
+def _format_rank(f: dict) -> tuple:
+    """同分辨率下比较格式优先级，tuple 比较，越小越优先。
+
+    1. m3u8_native（HLS 切片）最差：切成大量小片段逐个请求，并发度低，
+       下完还要 ffmpeg 拼接，实测比同分辨率的 DASH 直连流慢一个数量级。
+    2. 其次带音轨的渐进式格式：video+audio 一条流搞定，省掉一次合并。
+       （YouTube 从 1080p 起强制 DASH，所以这条只对 720p 及以下生效）
+    3. 最后按码率降序。
+
+    注意不能只按 tbr 排序——m3u8_native 的 tbr 往往标得比同分辨率的
+    DASH 直连流还高（1080p 下 m3u8 约 4.5M vs itag 137 约 4.4M）。
+    """
+    protocol = (f.get("protocol") or "").lower()
+    is_hls = 1 if "m3u8" in protocol else 0
+    no_audio = 0 if (f.get("acodec") or "none") != "none" else 1
+    return (is_hls, no_audio, -(f.get("tbr") or 0))
+
+
 def _build_format_list(raw_formats: list, duration: Optional[float]) -> list[dict]:
-    """整理视频格式列表：仅保留有画面的格式，按分辨率去重排序。"""
-    seen_heights = set()
-    result = []
+    """整理视频格式列表：仅保留有画面的格式，按分辨率去重排序。
+
+    同分辨率下取 _format_rank 最优的那个，而不是原始列表里最先出现的那个——
+    yt-dlp 会把 m3u8_native 排在 formats 前面，先到先得会一直选到它。
+    """
+    best_by_height: dict[int, dict] = {}
     for f in raw_formats:
         height = f.get("height") or 0
         vcodec = f.get("vcodec") or "none"
         if height <= 0 or vcodec == "none":
             continue
-        if height in seen_heights:
-            continue
-        seen_heights.add(height)
+        current = best_by_height.get(height)
+        if current is None or _format_rank(f) < _format_rank(current):
+            best_by_height[height] = f
 
+    result = []
+    for height, f in best_by_height.items():
         filesize = f.get("filesize") or f.get("filesize_approx")
         if not filesize and f.get("tbr") and duration:
             filesize = int(f["tbr"] * 1024 / 8 * duration)
@@ -140,7 +163,7 @@ def _build_format_list(raw_formats: list, duration: Optional[float]) -> list[dic
             "height": height,
             "width": f.get("width") or 0,
             "fps": f.get("fps") or 0,
-            "vcodec": vcodec.split(".")[0],
+            "vcodec": (f.get("vcodec") or "none").split(".")[0],
             "acodec": (f.get("acodec") or "none").split(".")[0],
             "filesize": filesize or None,
             "note": f.get("format_note") or "",
