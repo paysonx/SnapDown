@@ -1,8 +1,19 @@
 {
-  "name": "frontend",
+  "name": "snapdown-frontend",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
+  "description": "Vue 3 + Vite + Tailwind CSS frontend for SnapDown (瞬下) — a universal video downloader web app powered by yt-dlp.",
+  "license": "Apache-2.0",
+  "author": "Payson",
+  "homepage": "https://github.com/paysonx/SnapDown#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paysonx/SnapDown.git"
+  },
+  "bugs": {
+    "url": "https://github.com/paysonx/SnapDown/issues"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

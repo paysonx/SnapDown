@@ -1,0 +1,44 @@
+# 统一文本文件换行符为 LF，避免 Windows / macOS 协作时产生无意义 diff
+# （最终仓库里所有文本文件都是 LF，Windows 检出时由 core.autocrlf 自动转换）
+*               text=auto eol=lf
+
+# 显式标记为文本
+*.md            text eol=lf
+*.py            text eol=lf
+*.js            text eol=lf
+*.mjs           text eol=lf
+*.css           text eol=lf
+*.html          text eol=lf
+*.vue           text eol=lf
+*.json          text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.txt           text eol=lf
+*.gitignore     text eol=lf
+*.gitattributes text eol=lf
+Dockerfile      text eol=lf
+
+# 二进制
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.webp          binary
+*.ico           binary
+*.svg           text eol=lf
+*.mp4           binary
+*.mkv           binary
+*.webm          binary
+*.mp3           binary
+*.m4a           binary
+*.aac           binary
+*.opus          binary
+*.part          binary
+
+# GitHub Linguist：让前端构建产物与本机沙箱目录不参与语言统计
+frontend/dist   linguist-generated
+frontend/smoke-screenshots linguist-generated
+tools/ffmpeg/ffmpeg.exe linguist-vendored
+# 大型不必要文件，GitHub 仍会保存但语言统计忽略
+ref-site.png    linguist-documentation
+*.exe           binary
