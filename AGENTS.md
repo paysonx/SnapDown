@@ -15,7 +15,7 @@
 - ffmpeg 内置在 `<root>/tools/ffmpeg/ffmpeg.exe`
 - 修改后端后需重启 `run.py`；修改前端需重新 `npm run build`
 - 真实下载测试用 B站 `BV1GJ411x7h7`（yt-dlp 官方测试视频）；本机 YouTube/GitHub 不可达
-- 抖音走独立通道 `backend/app/douyin.py`（游客 `s_v_web_id`/`ttwid` + 纯 Python `a_bogus` 签名，**无需用户 Cookie**）；真实测试视频 `https://www.douyin.com/video/7682707061592088049`；抖音图文/私密/已删除会报错
+- 抖音走独立通道 `backend/app/douyin.py`，两级降级：①纯 Python 直连（游客 `s_v_web_id`/`ttwid` + 纯 Python `a_bogus` 签名，**无需用户 Cookie**）→ ②被风控拒绝时回退无头浏览器桥 `backend/app/douyin_browser_bridge.js`（Node + Playwright + 内置 Firefox，由页面自带签名运行时代取详情接口）。桥依赖 `frontend/node_modules/playwright`（已在 package.json 声明）与 `.playwright-browsers/`。真实测试视频 `https://www.douyin.com/video/7682707061592088049`（解析链接时注意 `/user/...?modal_id=<id>` 也是有效形态）；抖音图文/私密/已删除会报错
 - 合规底线：不碰 DRM 破解，页面保留版权提示
 
 ## 终端约定（用户明确要求，务必遵守）

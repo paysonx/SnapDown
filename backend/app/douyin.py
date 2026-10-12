@@ -2,30 +2,41 @@
 
 为什么需要独立于 yt-dlp 的通道：
     yt-dlp 的 Douyin 解析器调用 `www.douyin.com/aweme/v1/web/aweme/detail/`
-    时既不带 `a_bogus` 签名，也不带游客身份 cookie（`s_v_web_id` / `ttwid`），
+    时既不带签名，也不带游客身份 cookie（`s_v_web_id` / `ttwid` / `uifid`），
     因此抖音风控返回空 JSON，yt-dlp 只能报：
         ERROR: [Douyin] ...: Fresh cookies (not necessarily logged in) are needed
 
-该报错里的 "cookies" 并不要求用户登录，而是一份**游客设备身份**。本模块在
-服务端自动完成三件事，用户全程无感、无需提供任何 Cookie：
-    1. 生成/注册游客身份：`s_v_web_id`（本地生成）+ `ttwid`（抖音官方注册接口）
-    2. 用内置的纯 Python `a_bogus` 签名器给详情接口签名
-    3. 解析出无水印 CDN 直链后直接流式下载
+该报错里的 "cookies" 并不要求用户登录，而是一份**游客设备身份**。本模块按两条通道
+依次尝试，用户全程无感、无需提供任何 Cookie：
+
+    通道一（直连，快）：生成游客 `s_v_web_id` + 注册 `ttwid` + 用内置纯 Python
+        `a_bogus` 签名器给详情接口签名。2026-09 可用。
+    通道二（浏览器桥，兜底）：抖音后来在该接口上追加了 secsdk 签名要求 ——
+        除 `a_bogus` 外还要 `msToken`、`verifyFp`/`fp`，以及 secsdk 的
+        `uifid` + `timestamp` + `x-secsdk-web-signature`（依赖 ECDSA 会话密钥与
+        服务器 ticket，纯 Python 复现不现实）。此时直连会被
+        `403 Blocked by ArgusSecurityPlugin Uifid Not Found` 拒绝，改由
+        `douyin_browser_bridge.js` 在无头 Firefox 里打开视频页，让页面自带的
+        `bdms`/`secsdk` 运行时补全签名后代取详情 JSON。
 
 签名器来源：`backend/app/douyin_signer/`（Apache-2.0，见包内说明）。
 """
 import json
+import os
 import random
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from .config import DOWNLOADS_DIR, find_ffmpeg
+from .config import (DOUYIN_BRIDGE_SCRIPT, DOWNLOADS_DIR, FRONTEND_DIR,
+                     PLAYWRIGHT_BROWSERS_PATH, find_ffmpeg, find_node)
 from .douyin_signer import ABogus, DEFAULT_BROWSER_INFO
 from .tasks import Task, tasks
 
@@ -36,7 +47,13 @@ DETAIL_API = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
 TTWID_API = "https://ttwid.bytedance.com/ttwid/union/register/"
 
 _DOUYIN_HOSTS = ("douyin.com", "iesdouyin.com", "amemv.com")
+
+#: 链接里直接给出 aweme_id 的查询参数（用户主页弹窗分享用 `modal_id`）
+_ID_QUERY_KEYS = ("modal_id", "aweme_id", "item_ids", "vid")
 _URL_RE = re.compile(r"/(?:video|note|share/video)/(\d+)", re.I)
+
+#: 浏览器桥单次请求的等待上限（秒）
+_BRIDGE_TIMEOUT = 150
 
 # ttwid 游客身份缓存（注册接口会下发长期有效的值，没必要每次请求都重新注册）
 _ttwid_cache: dict[str, object] = {}
@@ -45,6 +62,10 @@ _ttwid_lock = threading.Lock()
 
 class DouyinError(Exception):
     """抖音通道内部错误。"""
+
+
+class _RiskControlBlocked(DouyinError):
+    """直连详情接口被风控拒绝（可回退浏览器桥）。"""
 
 
 def is_douyin(url: str) -> bool:
@@ -58,8 +79,28 @@ def _host_of(url: str) -> str:
 
 
 def _extract_id_from_url(url: str) -> Optional[str]:
-    m = _URL_RE.search(url)
-    return m.group(1) if m else None
+    """从链接中取 aweme_id。
+
+    抖音的分享链接不止 `/video/<id>` 一种：从用户主页点开弹窗分享出来的是
+    `/user/<sec_uid>?modal_id=<id>`，短链跳转后也可能只剩查询参数。因此路径和查询
+    参数都要看：路径里明确写了 `/video/<id>` 时以路径为准，否则回退到
+    `modal_id` / `aweme_id` / `item_ids` 等查询参数。
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+
+    m = _URL_RE.search(parsed.path or url)
+    if m:
+        return m.group(1)
+
+    for key in _ID_QUERY_KEYS:
+        for value in parse_qs(parsed.query).get(key, []):
+            value = value.strip()
+            if value.isdigit():
+                return value
+    return None
 
 
 def _resolve_aweme_id(url: str) -> str:
@@ -195,7 +236,52 @@ def _sign_detail_url(aweme_id: str) -> tuple[str, dict[str, str]]:
 
 
 def _fetch_detail(aweme_id: str) -> dict:
-    """请求抖音详情接口并返回 `aweme_detail` 字典。"""
+    """请求抖音详情接口并返回 `aweme_detail` 字典。
+
+    先走快路径（纯 Python 直连），被风控拒绝时自动回退到浏览器桥。
+    """
+    try:
+        return _fetch_detail_direct(aweme_id)
+    except _RiskControlBlocked as blocked:
+        detail = _fetch_detail_via_browser(aweme_id)
+        if detail is not None:
+            return detail
+
+        bridge = _browser_bridge_status()
+        if not bridge["ready"]:
+            raise DouyinError(
+                f"{blocked}；浏览器兜底通道也不可用：{bridge['reason']}"
+            ) from None
+        raise DouyinError(
+            f"抖音接口风控拦截（{blocked}），浏览器兜底通道同样未能取到数据，请稍后重试"
+        ) from None
+
+
+def _detail_status_error(data: dict) -> Optional[str]:
+    """从详情响应里读出业务错误；能判定是「该视频本身不可下载」时返回错误文案。
+
+    返回 None 表示响应虽然没给出视频，但成因不明（可能只是风控壳页），应继续兜底尝试。
+    """
+    status_code = data.get("status_code") or 0
+    if status_code == 0:
+        return None
+    if status_code in (11110, 2154):  # encrypt_data_miss / 无权限
+        return "该链接没有可下载的视频（可能是图文、私密或已删除）"
+    return None
+
+
+def _raise_detail_error(data: dict) -> None:
+    """响应里既没有 `aweme_detail` 也不是「无视频」时，抛出可诊断的错误。"""
+    hint = _detail_status_error(data)
+    if hint:
+        raise DouyinError(hint)
+    status_code = data.get("status_code")
+    extra = f"（status_code={status_code}）" if status_code else ""
+    raise _RiskControlBlocked(f"接口未返回视频数据{extra}")
+
+
+def _fetch_detail_direct(aweme_id: str) -> dict:
+    """直连详情接口（纯 Python + a_bogus）。被风控拦下时抛 `_RiskControlBlocked`。"""
     url, cookies = _sign_detail_url(aweme_id)
     headers = {
         "User-Agent": UA,
@@ -203,27 +289,86 @@ def _fetch_detail(aweme_id: str) -> dict:
         "Accept": "application/json, text/plain, */*",
     }
     try:
-        resp = httpx.get(url, headers=headers, cookies=cookies, timeout=30,
+        resp = httpx.get(url, headers=headers, cookies=cookies, timeout=20,
                          follow_redirects=False)
     except httpx.HTTPError as exc:
-        raise DouyinError(f"抖音接口请求失败：{exc}") from exc
+        raise _RiskControlBlocked(f"详情接口请求失败：{exc}") from exc
 
-    if resp.status_code != 200 or not resp.content:
-        raise DouyinError("抖音接口返回异常，可能触发了临时风控，请稍后重试")
+    if resp.status_code != 200:
+        snippet = resp.text.strip()[:80] or "空响应"
+        raise _RiskControlBlocked(f"详情接口返回 HTTP {resp.status_code}：{snippet}")
+    if not resp.content:
+        raise _RiskControlBlocked("详情接口返回空响应")
 
     try:
         data = resp.json()
     except ValueError as exc:
-        raise DouyinError("抖音接口返回了非 JSON 数据，可能触发了风控") from exc
+        raise _RiskControlBlocked("详情接口返回了非 JSON 数据") from exc
 
     detail = data.get("aweme_detail") or {}
     if not detail or not detail.get("video"):
-        # 图文 / 已删除 / 私密 / 风控壳页都拿不到可下载的视频
-        status_code = data.get("status_code")
-        if status_code:
-            raise DouyinError(f"抖音接口拒绝返回数据（status_code={status_code}）")
-        raise DouyinError("该链接没有可下载的视频（可能是图文、私密或已删除）")
+        _raise_detail_error(data)
     return detail
+
+
+def _browser_bridge_status() -> dict:
+    """检查浏览器桥是否可用，返回 `{ready, reason}` 供报错时给出可操作提示。"""
+    if not DOUYIN_BRIDGE_SCRIPT.is_file():
+        return {"ready": False, "reason": "未找到 bridge 脚本 douyin_browser_bridge.js"}
+    if find_node() is None:
+        return {"ready": False, "reason": "未找到 Node.js，请先安装 Node.js 18+"}
+    if not (FRONTEND_DIR / "node_modules" / "playwright").is_dir():
+        return {"ready": False,
+                "reason": "frontend 未安装 playwright，请在 frontend 目录执行 `npm install`"}
+    if not Path(PLAYWRIGHT_BROWSERS_PATH).is_dir():
+        return {"ready": False,
+                "reason": "未找到 Playwright 浏览器，请执行 `npx playwright install firefox`"}
+    return {"ready": True, "reason": ""}
+
+
+def _fetch_detail_via_browser(aweme_id: str) -> Optional[dict]:
+    """用无头浏览器会话代取详情（页面自带签名运行时）。不可用或失败时返回 None。"""
+    if not _browser_bridge_status()["ready"]:
+        return None
+
+    env = dict(os.environ)
+    env.setdefault("PLAYWRIGHT_BROWSERS_PATH", PLAYWRIGHT_BROWSERS_PATH)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="douyin-bridge-"))
+    out_file = tmp_dir / "detail.json"
+    urls_file = tmp_dir / "urls.json"
+    target = f"https://www.douyin.com/video/{aweme_id}"
+    try:
+        urls_file.write_text(json.dumps([target]), encoding="utf-8")
+        cmd = [find_node(), str(DOUYIN_BRIDGE_SCRIPT),
+               "--urls-file", str(urls_file), "--out", str(out_file)]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=_BRIDGE_TIMEOUT,
+                                  cwd=str(FRONTEND_DIR), env=env)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if proc.returncode != 0 or not out_file.is_file():
+            return None
+        payload = json.loads(out_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    finally:
+        for path in (out_file, urls_file):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            tmp_dir.rmdir()
+        except OSError:
+            pass
+
+    if not payload.get("ok"):
+        return None
+    result = (payload.get("results") or {}).get(target) or {}
+    detail = result.get("detail") or {}
+    if result.get("ok") and detail.get("video"):
+        return detail
+    return None
 
 
 def _video_formats(detail: dict) -> list[dict]:
@@ -319,6 +464,25 @@ def _human_duration(seconds: float) -> str:
     return f"{m}:{s:02d}"
 
 
+def _select_format(formats: list[dict], format_id: str) -> dict:
+    """按 format_id 选择格式；`best` 或未命中时回退到最高清晰度（formats[0]）。"""
+    if format_id != "best":
+        for fmt in formats:
+            if fmt["format_id"] == str(format_id):
+                return fmt
+    return formats[0]
+
+
+def _existing_audio(stem: str) -> Optional[Path]:
+    """查找已提取好的音频文件（mp3 优先，m4a 兜底），无则返回 None。"""
+    base = Path(DOWNLOADS_DIR) / stem
+    for suffix in (".mp3", ".m4a"):
+        path = base.with_suffix(suffix)
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
 def start_douyin_download(task: Task) -> None:
     """在后台线程中执行抖音直链下载。"""
     thread = threading.Thread(target=_run_douyin_download, args=(task,), daemon=True)
@@ -336,30 +500,33 @@ def _run_douyin_download(task: Task) -> None:
         if not formats:
             raise DouyinError("没有找到可下载的视频清晰度")
 
-        selected = None
-        if task.format_id == "best":
-            selected = formats[0]
-        else:
-            for fmt in formats:
-                if fmt["format_id"] == str(task.format_id):
-                    selected = fmt
-                    break
-            if selected is None:
-                selected = formats[0]
-
+        selected = _select_format(formats, task.format_id)
         title = detail.get("desc") or detail.get("item_title") or "未知标题"
         _backfill(task, title, detail, selected["height"])
 
-        filename = f"{_safe_title(title)} [{aweme_id}] [{selected['format_id']}].mp4"
-        filepath = Path(DOWNLOADS_DIR) / filename
+        stem = f"{_safe_title(title)} [{aweme_id}] [{selected['format_id']}]"
 
-        if filepath.is_file() and filepath.stat().st_size > 0:
-            tasks.update(task, status="done", percent=100.0,
-                         filepath=str(filepath), filename=filepath.name,
-                         filesize=filepath.stat().st_size, finished_at=time.time())
-            return
+        if task.mode == "audio":
+            # 最终产物是音频（mp3，ffmpeg 失败时回退 m4a）。缓存命中检查必须针对
+            # 音频文件本身，否则「先下视频、再下音频」会命中同一个 mp4 而错误复用视频。
+            filepath = _existing_audio(stem)
+            if filepath:
+                tasks.update(task, status="done", percent=100.0,
+                             filepath=str(filepath), filename=filepath.name,
+                             filesize=filepath.stat().st_size, finished_at=time.time())
+                return
+            # 音频模式先把视频流下载到独立中间文件，提取后即删除，
+            # 绝不覆盖 / 误删同高度已存在的正式视频 mp4。
+            video_path = Path(DOWNLOADS_DIR) / f"{stem}.audio.src.mp4"
+        else:
+            video_path = Path(DOWNLOADS_DIR) / f"{stem}.mp4"
+            if video_path.is_file() and video_path.stat().st_size > 0:
+                tasks.update(task, status="done", percent=100.0,
+                             filepath=str(video_path), filename=video_path.name,
+                             filesize=video_path.stat().st_size, finished_at=time.time())
+                return
 
-        tmp_path = filepath.with_suffix(filepath.suffix + ".part")
+        tmp_path = video_path.with_suffix(video_path.suffix + ".part")
         headers = {
             "User-Agent": UA,
             "Referer": "https://www.douyin.com/",
@@ -374,13 +541,17 @@ def _run_douyin_download(task: Task) -> None:
             tmp_path.unlink(missing_ok=True)
             raise DouyinError("下载中断：没有收到数据")
 
-        tmp_path.replace(filepath)
+        tmp_path.replace(video_path)
 
         if task.mode == "audio":
-            filepath = _extract_audio(filepath)
+            # ffmpeg 提音轨期间没有下载进度，给一个明确的处理中提示，避免用户以为卡死。
+            tasks.update(task, speed="正在提取音频…", eta="")
+            filepath = _extract_audio(video_path, Path(DOWNLOADS_DIR) / stem)
+        else:
+            filepath = video_path
 
         filesize = filepath.stat().st_size
-        tasks.update(task, status="done", percent=100.0,
+        tasks.update(task, status="done", percent=100.0, speed="", eta="",
                      filepath=str(filepath), filename=filepath.name,
                      filesize=filesize, finished_at=time.time())
     except DouyinError as exc:
@@ -423,16 +594,21 @@ def _download_to(path: Path, url: str, headers: dict, task: Task) -> bool:
                                      speed=_human_speed(speed),
                                      eta=_human_eta(eta))
                         last_update = now
+            # 字节流已全部落盘：立即把进度推到 100%。否则最后一个 0.25s 采样点
+            # 往往停在 99.x%，随后进入（可能较长的）音频提取阶段，进度条就卡在那里。
+            if received > 0:
+                tasks.update(task, status="downloading", percent=100.0,
+                             speed="", eta="")
             return received > 0
     except httpx.HTTPError as exc:
         raise DouyinError(f"视频下载失败：{exc}") from exc
 
 
-def _extract_audio(video_path: Path) -> Path:
-    """用 ffmpeg 从已下载的视频文件中抽出 MP3 音频，并删除原视频文件。
+def _extract_audio(video_path: Path, out_stem: Path) -> Path:
+    """用 ffmpeg 从已下载的视频文件中抽出 MP3 音频（失败回退 M4A），并删除原视频文件。
 
     抖音直链返回的是带音轨的 mp4，没有独立的纯音频流；因此“仅音频”模式
-    先复用现有的视频下载通道，再在本机用 ffmpeg 提取音轨。
+    先把视频流下载到独立中间文件，再在本机用 ffmpeg 提取音轨到 `out_stem`。
     """
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -443,7 +619,7 @@ def _extract_audio(video_path: Path) -> Path:
         (".m4a", ["-vn", "-c:a", "aac", "-b:a", "192k"]),
     ]
     for suffix, args in attempts:
-        audio_path = video_path.with_suffix(suffix)
+        audio_path = out_stem.with_suffix(suffix)
         cmd = [ffmpeg, "-y", "-loglevel", "error",
                "-i", str(video_path), *args, str(audio_path)]
         try:

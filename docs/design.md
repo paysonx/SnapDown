@@ -79,15 +79,35 @@
 
 ### 3.3 抖音专用通道（douyin.py）
 
-yt-dlp 的 Douyin 解析器会报 `Fresh cookies (not necessarily logged in) are needed`——它缺的不是登录态，而是一份**游客设备身份**（`s_v_web_id`/`ttwid`）+ `a_bogus` 签名。为做到「用户无需提供 Cookie」，后端在检测到抖音链接时**绕过 yt-dlp**，走独立通道：
+yt-dlp 的 Douyin 解析器会报 `Fresh cookies (not necessarily logged in) are needed`——它缺的不是登录态，而是一份**游客设备身份**（`s_v_web_id`/`ttwid`/`uifid`）+ 完整签名。为做到「用户无需提供 Cookie」，后端在检测到抖音链接时**绕过 yt-dlp**，走独立通道，并按「快路径 → 浏览器兜底」两级降级：
 
-1. 解析短链/视频链接拿到 `aweme_id`
+**通道一：纯 Python 直连（快）**
+
+1. 解析短链/视频链接拿到 `aweme_id`——路径 `/video/<id>`、`/note/<id>` 之外，**还必须认 `?modal_id=<id>`**（用户主页点开弹窗后复制出来的分享链接就是这个形态，早期实现只认路径，直接报「无法解析出视频 ID」）
 2. 本地生成 `s_v_web_id`，调 `ttwid.bytedance.com/ttwid/union/register/` 注册游客 `ttwid`（内存缓存 12h）
-3. 用内置纯 Python 签名器（`douyin_signer/`，Apache-2.0，改编自 Evil0ctal/Douyin_TikTok_Download_API v5）给 `aweme/v1/web/aweme/detail/` 接口计算 `a_bogus`
+3. 用内置纯 Python 签名器（`douyin_signer/`，Apache-2.0）给 `aweme/v1/web/aweme/detail/` 接口计算 `a_bogus`
 4. 从 `aweme_detail.video.bit_rate[]` 中按分辨率去重，每个分辨率只保留码率最高的 `mp4`（自带音轨，免 ffmpeg 合并）
 5. 下载时重新取详情拿最新 CDN 直链，流式写盘并复用同一套任务进度字段
 
+**通道二：无头浏览器桥（兜底，`douyin_browser_bridge.js`）**
+
+抖音后续在该接口上又加了一层校验：除了 `a_bogus`，还要求 `msToken`、`verifyFp`/`fp`，以及 secsdk 的 `uifid` + `timestamp` + `x-secsdk-web-signature` 三件套。这些由页面里的 `bdms`/`secsdk` 运行时在真实浏览器环境中生成（依赖 ECDSA 会话密钥与服务器签发的 ticket），**纯 Python 复现不现实**——此时直连必定被
+`HTTP 403 Blocked by ArgusSecurityPlugin Uifid Not Found` 拒绝。
+
+因此通道一被风控拒绝（403 / 空响应 / 非 JSON / 响应里没有视频但成因不明）时，`_fetch_detail()` 自动回退到浏览器桥：
+
+- Node 跑 Playwright 启动 **headless Firefox**（浏览器内置在 `.playwright-browsers/`），打开 `www.douyin.com/video/<id>`
+- 等页面自带的签名运行时初始化完成后，用**页内 `fetch`** 请求详情接口——签名参数由页面自己补全，后端不碰签名算法
+- 页内请求会重试直至拿到数据（secsdk 未就绪时会被 403，稍等即可），结果写入临时 JSON 由 Python 读回
+- 桥依赖：`node` + `frontend/node_modules/playwright`（已在 `frontend/package.json` 声明）+ 无头浏览器；缺任一项时会在错误信息里说明缺什么、怎么补
+
+两条通道都失败时，报错会带上**真实原因**（HTTP 状态码 + 响应体片段），而不是笼统的「请稍后重试」。
+
+> 注意：`aweme_detail` 里的 CDN 直链约 1–2 小时过期，所以下载开始时必须重新取一次详情，不能复用解析阶段的直链。
+
 该通道不影响其他平台（仍走 yt-dlp）；抖音图文/私密/已删除会明确报错。
+
+**抖音文件名必须按 `mode` 区分**（经历过真实 bug）：抖音的 mp4 自带音轨，没有独立纯音频流，因此「仅音频」模式先下载视频流再用 ffmpeg 提音轨。早期实现里视频与音频共用 `…[分辨率].mp4` 作为缓存判断目标，导致「先下视频、再下同链接音频」时，第二次下载命中第一次的视频 mp4 直接返回、跳过提音轨。现改为：视频缓存查 `.mp4`、音频缓存查已提取好的 `.mp3/.m4a`（`_existing_audio`）；音频模式把视频流下载到独立中间文件 `…[分辨率].audio.src.mp4`，提音轨后即删除，绝不覆盖/误删正式视频文件。
 
 ### 3.4 ffmpeg 定位顺序（config.py）
 
@@ -165,12 +185,14 @@ yt-dlp 的 Douyin 解析器会报 `Fresh cookies (not necessarily logged in) are
 ## 7. 已知问题与限制
 
 1. **YouTube/GitHub 本机不可达**（网络层），代码无问题，部署海外服务器即可
-2. **抖音通道为逆向签名方案，平台可能改版**：`a_bogus` / `ttwid` 参数若失效，需按 `douyin_signer/` 内说明重新对齐（当前实测 2026-09 可用）
+2. **抖音通道为逆向/浏览器双通道方案，平台可能改版**：`a_bogus` / secsdk 参数若失效，通道一（直连）会失效，此时靠通道二（无头浏览器桥）兜底；若连页面签名运行时也改版，需按 `douyin_browser_bridge.js` 与 `douyin_signer/` 说明重新对齐（2026-09 实测：直连已被 secsdk 拦截，实际由浏览器桥出数据）
+3. 抖音走浏览器桥时单次解析约 **10–15 秒**（要启动无头浏览器并等签名运行时就绪），比直连慢；直连可用时不会触发桥
 3. 播放列表明确拒绝（`noplaylist` + 解析时检测 entries 返回 400 提示）
 4. 任务历史在内存中，服务重启即清空
 5. yt-dlp 平台解析器有时效性（平台改版会导致失效），升级 `yt-dlp` 版本通常可修复
 6. 同链接同格式重复下载会跳过（yt-dlp 不覆盖），若需强制覆盖需加 `overwrites: True`
-7. 未做并发下载数与速率限制（二期会员分层时一并设计）
+7. 未做并发下载数与速率限制（二期会员分层时一并设计）；抖音走浏览器桥时每次调用会新起一个无头浏览器进程，并发量大会吃内存，需要时再加信号量或常驻浏览器
+8. Docker 镜像（第 6 节）只装了 python+ffmpeg，**没有 Node 与浏览器**，因此容器里抖音只能走通道一；要在容器里启用浏览器桥需额外装 Node + Playwright Firefox
 
 ## 8. 未来扩展路线图与扩展点
 
