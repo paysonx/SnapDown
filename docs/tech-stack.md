@@ -27,7 +27,7 @@
 | [httpx](https://www.python-httpx.org/) | `>=0.28.0` | HTTP 客户端 | 抖音通道请求 + 短链跳转 + 流式下载；测试也用 |
 | python-multipart | `>=0.0.9` | 表单解析（预留） | FastAPI 处理 multipart 的依赖 |
 | pytest | `>=8.0.0`（dev） | 单元/集成测试 | `pytest.ini` 里 marker 机制 |
-| ffmpeg | 内置静态二进制 `tools/ffmpeg/ffmpeg.exe`（4.1，2018 构建） | 音视频合并 | 随项目内置，用户零安装 |
+| ffmpeg | npm 包 `@ffmpeg-installer/ffmpeg` 提供的静态二进制（4.1） | 音视频合并 | 前端 `npm install` 时按平台装上，用户零安装；仓库不分发二进制 |
 
 ### 2.2 前端（Node）
 
@@ -57,7 +57,7 @@
 free-video-download/
 ├── run.py                          # 启动入口：uvicorn 托管 backend.app.main:app
 ├── Dockerfile                      # 部署预留（多阶段构建）
-├── AGENTS.md / README.md / prompt.md
+├── AGENTS.md / README.md
 ├── docs/
 │   ├── requirements.md             # 需求基线
 │   ├── design.md                   # 方案设计
@@ -94,7 +94,6 @@ free-video-download/
 │   ├── vite.config.js              # vue + tailwind 插件 + /api 代理 + preserveSymlinks
 │   ├── index.html / package.json / package-lock.json
 │   └── public/favicon.svg
-├── tools/ffmpeg/ffmpeg.exe         # 内置合并工具
 └── downloads/                      # 下载文件保存目录（.gitignore 忽略）
 ```
 
@@ -167,7 +166,7 @@ def _outtmpl():
 "merge_output_format": "mp4/mkv",   # 而非硬性 "mp4"
 ```
 
-- **坑**：YouTube 的 `bestaudio` 常命中 opus/webm（如 `251`），内置 ffmpeg（4.1）把 opus 封装进 mp4 视为 experimental，强制 `mp4` 会报 `ERROR: Postprocessing: Stream #1:0 -> #0:1 (copy)`。
+- **坑**：YouTube 的 `bestaudio` 常命中 opus/webm（如 `251`），ffmpeg 4.1 把 opus 封装进 mp4 视为 experimental，强制 `mp4` 会报 `ERROR: Postprocessing: Stream #1:0 -> #0:1 (copy)`。
 - **解**：写成 `mp4/mkv`，yt-dlp 按音视频编码自动挑容器：`avc1/av01/vp9 + m4a → mp4`，`opus 音轨 → mkv`。
 
 ### 5.5 progress_hooks 与最终文件路径
@@ -224,7 +223,7 @@ else:
 
 - `ROOT_DIR = Path(__file__).resolve().parent.parent.parent`（config.py 上三级 = 项目根）。
 - 环境变量：`FVD_HOST`（默认 127.0.0.1）、`FVD_PORT`（8000）、`FVD_DOWNLOADS_DIR`、`FVD_MAX_FILESIZE`（0=不限）、`FVD_FFMPEG_PATH`、`FVD_FRONTEND_DIST`。
-- `find_ffmpeg()` 优先级：环境变量 → 内置 `tools/ffmpeg/ffmpeg.exe` → 系统 PATH。
+- `find_ffmpeg()` 优先级：环境变量 → `frontend/node_modules/@ffmpeg-installer/<平台>/` 静态二进制 → 系统 PATH。
 
 ---
 
@@ -415,7 +414,7 @@ ENV FVD_HOST=0.0.0.0 FVD_PORT=8000
 |---|---|---|---|---|
 | 1 | B站「best」报 Requested format is not available | B站只有 DASH 流，`best` 不合并 | 用 `bestvideo+bestaudio` 选择器 | downloader.py |
 | 2 | 同视频不同清晰度复用旧文件 | outtmpl 缺 `%(format_id)s`，同名跳过 | 模板带 `%(format_id)s` | downloader.py |
-| 3 | opus 音轨合并报 Postprocessing 错误 | 强制 `mp4` 而内置 ffmpeg 视 opus 为 experimental | `merge_output_format: "mp4/mkv"` | downloader.py |
+| 3 | opus 音轨合并报 Postprocessing 错误 | 强制 `mp4` 而 ffmpeg 4.1 视 opus 为 experimental | `merge_output_format: "mp4/mkv"` | downloader.py |
 | 4 | 浏览器跑旧构建（改代码无效） | 缺 Cache-Control，缓存旧 html/bundle | 入口 `no-cache`、assets `immutable` | main.py |
 | 5 | 下载记录无封面/标题 | `/api/download` 只传 url+format_id | 请求体回传 + `_backfill_meta` 兜底 | main.py/downloader.py |
 | 6 | VIP「立即开通」跳回主页 | hash 路由下 `href="#plans"` 被当路由 | 改 `scrollIntoView()` | VipPage.vue |

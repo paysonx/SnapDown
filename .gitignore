@@ -20,6 +20,13 @@ frontend/smoke-screenshots/
 backend/.pytest_cache/
 .dsh/
 
+# ffmpeg 二进制不随仓库分发：clone 体积会膨胀到 60MB+，且 Windows 版对
+# Linux/macOS 用户无意义。改由前端 npm install 经 @ffmpeg-installer/ffmpeg 提供。
+tools/ffmpeg/
+
+# 开源仓库不收录的素材
+ref-site.png
+
 # 系统
 .DS_Store
 Thumbs.db

@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from . import config, downloader
 from .tasks import Task, tasks
 
-app = FastAPI(title="FlashDown 万能视频下载", version="0.1.0")
+app = FastAPI(title="SnapDown 万能视频下载", version="0.1.0")
 
 # 开发模式允许 Vite dev server 跨域访问
 app.add_middleware(
@@ -58,7 +58,7 @@ class DownloadRequest(BaseModel):
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "app": "flashdown"}
+    return {"status": "ok", "app": "snapdown"}
 
 
 @app.post("/api/parse")

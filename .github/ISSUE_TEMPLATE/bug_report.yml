@@ -1,0 +1,49 @@
+name: Bug 反馈
+description: 报告一个可复现的缺陷
+labels: ["bug"]
+body:
+  - type: textarea
+    id: desc
+    attributes:
+      label: 问题描述
+      placeholder: 哪个平台、哪个操作、预期结果是什么、实际发生了什么
+    validations:
+      required: true
+
+  - type: input
+    id: url
+    attributes:
+      label: 涉及的视频链接
+      placeholder: https://www.bilibili.com/video/BV... 或 https://www.douyin.com/video/...
+      description: 私密 / 已删除 / 图文内容的链接请注明，否则无法复现
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 报错信息
+      description: 浏览器 F12 Console 与后端终端的完整报错，抖音通道的报错通常带 HTTP 状态码，请一并贴出
+      render: shell
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: 出问题的功能
+      options:
+        - 解析
+        - 下载视频
+        - 仅提取音频
+        - 播放 / 合并失败
+        - 界面 / 移动端布局
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 运行环境
+      placeholder: 操作系统 / 浏览器 / Python 版本
+    validations:
+      required: true

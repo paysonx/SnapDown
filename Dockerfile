@@ -1,6 +1,6 @@
 # 瞬下 SnapDown 部署镜像（预留，未经实机验证）
-# 构建：docker build -t flashdown .
-# 运行：docker run -p 8000:8000 -v $PWD/downloads:/app/downloads flashdown
+# 构建：docker build -t snapdown .
+# 运行：docker run -p 8000:8000 -v $PWD/downloads:/app/downloads snapdown
 
 FROM node:22-alpine AS webbuild
 WORKDIR /web

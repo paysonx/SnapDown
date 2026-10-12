@@ -12,7 +12,7 @@
 - 后端入口 `run.py`；生产模式单进程同时托管 `frontend/dist`（先 `npm run build`）
 - venv 在 `<root>/.venv`（基于用户安装的 Python 3.14，`py -3`）；若重建 venv 需恢复 `sitecustomize.py`（见设计文档 9.1）
 - 下载文件保存在 `<root>/downloads/`，内存任务表上限 100 条（无数据库，勿引入不必要的持久化，除非用户要求）
-- ffmpeg 内置在 `<root>/tools/ffmpeg/ffmpeg.exe`
+- ffmpeg 由前端 `npm install` 经 `@ffmpeg-installer/ffmpeg` 装到 `frontend/node_modules/`，定位逻辑在 `backend/app/config.py:find_ffmpeg()`（环境变量 → node_modules → 系统 PATH）；**仓库不分发 ffmpeg 二进制**，改完前端依赖需重跑 `npm install`
 - 修改后端后需重启 `run.py`；修改前端需重新 `npm run build`
 - 真实下载测试用 B站 `BV1GJ411x7h7`（yt-dlp 官方测试视频）；本机 YouTube/GitHub 不可达
 - 抖音走独立通道 `backend/app/douyin.py`，两级降级：①纯 Python 直连（游客 `s_v_web_id`/`ttwid` + 纯 Python `a_bogus` 签名，**无需用户 Cookie**）→ ②被风控拒绝时回退无头浏览器桥 `backend/app/douyin_browser_bridge.js`（Node + Playwright + 内置 Firefox，由页面自带签名运行时代取详情接口）。桥依赖 `frontend/node_modules/playwright`（已在 package.json 声明）与 `.playwright-browsers/`。真实测试视频 `https://www.douyin.com/video/7682707061592088049`（解析链接时注意 `/user/...?modal_id=<id>` 也是有效形态）；抖音图文/私密/已删除会报错

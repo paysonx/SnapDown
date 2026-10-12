@@ -38,7 +38,5 @@ Dockerfile      text eol=lf
 # GitHub Linguist：让前端构建产物与本机沙箱目录不参与语言统计
 frontend/dist   linguist-generated
 frontend/smoke-screenshots linguist-generated
-tools/ffmpeg/ffmpeg.exe linguist-vendored
 # 大型不必要文件，GitHub 仍会保存但语言统计忽略
-ref-site.png    linguist-documentation
 *.exe           binary

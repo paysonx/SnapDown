@@ -126,7 +126,7 @@ body {
   color: transparent;
 }
 
-/* 卡片：参考站设计语言 —— 圆角 + 细描边 + 蓝色光晕悬停 */
+/* 卡片：圆角 + 细描边 + 蓝色光晕悬停 */
 .card {
   @apply rounded-xl bg-white ring-1 ring-slate-200/60 transition-all duration-500;
 }

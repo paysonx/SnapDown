@@ -24,7 +24,7 @@
                           ┌──────────▼──────────┐
                           │      yt-dlp         │
                           │  parse: extract_info│  合并音视频 → 调用 ffmpeg
-                          │  download + hooks   │  （tools/ffmpeg/ffmpeg.exe 内置）
+                          │  download + hooks   │  （npm 静态二进制，见 config.py）
                           └──────────┬──────────┘
                                      │ 下载写入 downloads/ 目录（标题[ID].mp4）
 ```
@@ -37,7 +37,7 @@
 | 后端 | FastAPI + uvicorn | 轻量、异步、自带 OpenAPI 文档；Python 生态统一 |
 | 存储 | 内存任务表 + 文件系统 | 用户要求"先不需要数据库" |
 | 前端 | Vue 3 + Vite + Tailwind CSS v4（`@tailwindcss/vite` 插件） | 用户确认的工程化方案 |
-| 合并工具 | ffmpeg 静态二进制（npm 包 `@ffmpeg-installer/win32-x64` 提取） | B站 DASH 流需要视频+音频合并；随项目内置，用户零安装 |
+| 合并工具 | ffmpeg 静态二进制（npm 包 `@ffmpeg-installer/ffmpeg` 随平台安装） | B站 DASH 流需要视频+音频合并；`npm install` 即可获得，用户零安装 |
 | 前端测试 | Playwright（Firefox，浏览器内置在 `.playwright-browsers/`） | 本机 Edge/Chrome 在沙箱下无法常驻 |
 
 ## 3. 后端设计
@@ -70,7 +70,7 @@
   —— **必须带 `%(format_id)s`**（经历过真实 bug）：不带它时同一视频的不同清晰度都落盘成同名文件，
   第二次下载会被 yt-dlp 因"文件已存在"跳过而复用上一次（错误分辨率）的文件
   —— **`merge_output_format` 必须是偏好列表而非硬性 mp4**（经历过真实 bug）：YouTube 的 `bestaudio`
-  常命中 opus/webm（如 `251`），而内置 ffmpeg（4.1，2018 构建）把 opus 封装进 mp4 视为 experimental，
+  常命中 opus/webm（如 `251`），而 ffmpeg 4.1 把 opus 封装进 mp4 视为 experimental，
   强制 `mp4` 会报 `ERROR: Postprocessing: Stream #1:0 -> #0:1 (copy)`。写成 `mp4/mkv` 后 yt-dlp
   会按音视频编码自动挑容器：avc1/av01/vp9 + m4a → mp4，opus 音轨 → mkv，合并不再失败
 - `progress_hooks` 回写 `percent/speed/eta`（total 取 `total_bytes` 或 `total_bytes_estimate`）
@@ -112,8 +112,10 @@ yt-dlp 的 Douyin 解析器会报 `Fresh cookies (not necessarily logged in) are
 ### 3.4 ffmpeg 定位顺序（config.py）
 
 1. 环境变量 `FVD_FFMPEG_PATH`
-2. `<root>/tools/ffmpeg/ffmpeg.exe`（内置）
+2. `frontend/node_modules/@ffmpeg-installer/<平台>/ffmpeg`（前端 `npm install` 时装上）
 3. 系统 PATH 中的 `ffmpeg`
+
+仓库不内置 ffmpeg 二进制（会让 clone 体积膨胀到 60MB+，且 Windows 版对 Linux/macOS 无意义）。
 
 ### 3.5 配置项（环境变量）
 
@@ -125,7 +127,7 @@ yt-dlp 的 Douyin 解析器会报 `Fresh cookies (not necessarily logged in) are
 
 ## 4. 前端设计
 
-### 4.1 设计系统（继承参考站语言 + 品牌差异化）
+### 4.1 设计系统（白底极简 + 品牌渐变）
 
 - 底色为**渐变白**（`body` 上 `linear-gradient(180deg, #fff → #e6efff → #dee8ff → #f2ecff)`，`background-attachment: fixed`），主色 `#2563eb`（blue-600），渐变 `linear-gradient(135deg, #2563eb, #4f46e5)` 用于 Logo/CTA/进度条
 - 文字：标题 slate-900 粗体；正文 slate-700；次要 slate-500；装饰 slate-300/400
