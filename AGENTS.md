@@ -32,6 +32,11 @@
 
 npm 设 `npm_config_cache`、pip 设 `TMP/TEMP` 到工作区、Vite 构建与 Playwright 冒烟测试需升级权限执行；Playwright 浏览器已内置在 `.playwright-browsers/`。详见设计文档第 9 节。
 
+## 本机网络（实测 2026-10）
+
+- **GitHub 需要走本地代理**：直连 `github.com:443` TCP 不通（DNS 正常，解析到 20.205.243.166），但 `github.com:80`、`ssh.github.com:443`、`api.github.com:443` 均可达。本机 xray 在 `127.0.0.1:10808` 提供 HTTP 代理，已对该仓库执行 `git config --local http.proxy/https.proxy`（仅写入 `.git/config`，不进版本库）。**xray 未运行时所有 git 远程操作都会超时。**
+- **YouTube 不可达**（同 AGENTS.md 原有记录）；npm、pip、B站、抖音均正常。
+
 ## 常用命令（Git Bash）
 
 ```bash
